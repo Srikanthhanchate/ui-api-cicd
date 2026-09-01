@@ -1,0 +1,24 @@
+# Node
+ui/node_modules/
+ui/dist/
+
+# Java
+api/target/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Terraform
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/.terraform.lock.hcl
+
+# Environment
+.env
+*.env
