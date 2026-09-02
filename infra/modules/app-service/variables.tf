@@ -23,3 +23,27 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "runtime_stack" {
+  description = "Runtime stack for the Web App"
+  type        = string
+  default     = null
+}
+
+variable "java_version" {
+  description = "Java version for the Web App"
+  type        = string
+  default     = null
+}
+
+variable "java_server" {
+  description = "Java server type"
+  type        = string
+  default     = null
+}
+
+variable "java_server_version" {
+  description = "Java server version"
+  type        = string
+  default     = null
+}

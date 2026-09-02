@@ -43,6 +43,10 @@ module "api_app_service" {
   location            = module.resource_group.location
   service_plan_id     = module.app_service_plan.id
 
+  java_version        = "21"
+  java_server         = "JAVA"
+  java_server_version = "21"
+
   tags = merge(var.tags, {
     component = "api"
   })
