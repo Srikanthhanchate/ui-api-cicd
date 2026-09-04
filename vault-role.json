@@ -1,0 +1,11 @@
+{
+  "role_type": "jwt",
+  "bound_audiences": ["https://github.com/Srikanthhanchate"],
+  "bound_claims_type": "string",
+  "bound_claims": {
+    "repository": "Srikanthhanchate/ui-api-cicd"
+  },
+  "user_claim": "sub",
+  "token_policies": ["ui-api-cicd-version"],
+  "token_ttl": "10m"
+}

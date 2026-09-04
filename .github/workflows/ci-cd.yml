@@ -5,12 +5,61 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      deployment_tag:
+        description: 'Enter the deployment tag'
+        required: true
+        type: string
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
+
+
+
+    # ============================================================
+  # Stage 0 - Get Version from Vault
+  # ============================================================
+  get-version:
+    name: Get Version
+    runs-on: ubuntu-latest
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Authenticate to Vault
+        uses: hashicorp/vault-action@v3
+        with:
+          url: ${{ vars.VAULT_ADDR }}
+          method: jwt
+          role: ui-api-cicd
+          jwtGithubAudience: https://github.com/Srikanthhanchate
+          exportToken: true
+          secrets: |
+            secret/data/ui-api-cicd version | CURRENT_VERSION
+
+      - name: Bump version
+        id: version
+        shell: bash
+        run: |
+          current="${{ env.CURRENT_VERSION }}"
+          IFS='.' read -r major minor patch <<< "$current"
+          version="$major.$minor.$((patch + 1))"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "New version: $version"
+
+      - name: Update version in Vault
+        shell: bash
+        run: |
+          curl \
+            --request POST \
+            --header "X-Vault-Token: $VAULT_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data "{\"data\":{\"version\":\"${{ steps.version.outputs.version }}\"}}" \
+            "${{ vars.VAULT_ADDR }}/v1/secret/data/ui-api-cicd"
 
   # ============================================================
   # Stage 0 - Detect Changes
@@ -46,7 +95,9 @@ jobs:
   terraform:
     name: Terraform Infrastructure
     runs-on: ubuntu-latest
-    needs: detect-changes
+    needs:
+      - get-version
+      - detect-changes
 
     steps:
       - name: Checkout
@@ -85,6 +136,7 @@ jobs:
     name: Build UI
     runs-on: ubuntu-latest
     needs:
+      - get-version
       - detect-changes
       - terraform
 
@@ -107,7 +159,7 @@ jobs:
 
       - name: Build UI
         working-directory: ui
-        run: npm run build
+        run: VITE_APP_VERSION=${{ needs.get-version.outputs.version }} npm run build
 
       - name: Upload UI artifact
         uses: actions/upload-artifact@v4
@@ -122,6 +174,7 @@ jobs:
     name: Build API
     runs-on: ubuntu-latest
     needs:
+      - get-version
       - detect-changes
       - terraform
 
@@ -157,6 +210,7 @@ jobs:
     name: Deploy UI
     runs-on: ubuntu-latest
     needs:
+      - get-version
       - detect-changes
       - build-ui
 
@@ -189,6 +243,7 @@ jobs:
     name: Deploy API
     runs-on: ubuntu-latest
     needs:
+      - get-version
       - detect-changes
       - build-api
 
@@ -213,3 +268,46 @@ jobs:
         with:
           app-name: app-ui-api-cicd-api-dev-2026
           package: api-build
+  
+  
+  tag:
+    name: Create Deployment Tag
+    runs-on: ubuntu-latest
+
+    needs:
+      - get-version
+      - deploy-ui
+      - deploy-api
+
+    if: |
+      always() &&
+      (
+        (
+          needs.deploy-ui.result == 'success' &&
+          needs.deploy-api.result == 'skipped'
+        ) ||
+        (
+          needs.deploy-ui.result == 'skipped' &&
+          needs.deploy-api.result == 'success'
+        ) ||
+        (
+          needs.deploy-ui.result == 'success' &&
+          needs.deploy-api.result == 'success'
+        )
+      )
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create deployment tag
+        env:
+          VERSION: ${{ needs.get-version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git tag "dev-$VERSION"
+          git push origin "dev-$VERSION"
