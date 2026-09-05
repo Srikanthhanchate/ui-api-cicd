@@ -34,6 +34,7 @@ jobs:
         uses: hashicorp/vault-action@v3
         with:
           url: ${{ vars.VAULT_ADDR }}
+          namespace: admin
           method: jwt
           role: ui-api-cicd
           jwtGithubAudience: https://github.com/Srikanthhanchate
