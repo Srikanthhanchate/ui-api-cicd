@@ -83,6 +83,7 @@ jobs:
             --fail \
             --request POST \
             --header "X-Vault-Token: $VAULT_TOKEN" \
+            --header "X-Vault-Namespace: admin" \
             --header "Content-Type: application/json" \
             --data "{\"data\":{\"version\":\"${{ steps.version.outputs.version }}\"}}" \
             "${{ vars.VAULT_ADDR }}/v1/secret/data/ui-api-cicd"
