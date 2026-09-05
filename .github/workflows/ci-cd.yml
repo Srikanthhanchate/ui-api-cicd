@@ -36,6 +36,7 @@ jobs:
           url: ${{ vars.VAULT_ADDR }}
           namespace: admin
           method: jwt
+          path: jwt-github-actions
           role: ui-api-cicd
           jwtGithubAudience: https://github.com/Srikanthhanchate
           exportToken: true
