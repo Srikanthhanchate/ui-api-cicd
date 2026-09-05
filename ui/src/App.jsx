@@ -730,7 +730,7 @@ function Resource({ name, type }) {
 
       <div className="resource-status">
         <span></span>
-        Active
+        Active yes
       </div>
 
     </div>
