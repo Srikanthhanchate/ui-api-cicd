@@ -4,32 +4,50 @@ on:
   push:
     branches:
       - main
+
   workflow_dispatch:
     inputs:
       deployment_tag:
-        description: 'Enter the deployment tag'
+        description: 'Enter the existing deployment tag, e.g. dev-1.0.6'
         required: true
         type: string
+
+      component:
+        description: 'Component to deploy'
+        required: true
+        type: choice
+        options:
+          - ui
+          - api
+          - both
 
 permissions:
   contents: write
   id-token: write
 
+# Prevent two automatic runs from consuming the same Vault version
+concurrency:
+  group: ui-api-cicd-version
+  cancel-in-progress: false
+
+
+# ============================================================
+# Stage 0 - Get Version from Vault
+# Automatic runs only
+# ============================================================
 jobs:
 
-
-
-    # ============================================================
-  # Stage 0 - Get Version from Vault
-  # ============================================================
   get-version:
     name: Get Version
     runs-on: ubuntu-latest
+
+    if: github.event_name == 'push'
 
     outputs:
       version: ${{ steps.version.outputs.version }}
 
     steps:
+
       - name: Authenticate to Vault
         uses: hashicorp/vault-action@v3
         with:
@@ -48,27 +66,37 @@ jobs:
         shell: bash
         run: |
           current="${{ env.CURRENT_VERSION }}"
+
           IFS='.' read -r major minor patch <<< "$current"
+
           version="$major.$minor.$((patch + 1))"
+
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          echo "Current version: $current"
           echo "New version: $version"
 
       - name: Update version in Vault
         shell: bash
         run: |
           curl \
+            --fail \
             --request POST \
             --header "X-Vault-Token: $VAULT_TOKEN" \
             --header "Content-Type: application/json" \
             --data "{\"data\":{\"version\":\"${{ steps.version.outputs.version }}\"}}" \
             "${{ vars.VAULT_ADDR }}/v1/secret/data/ui-api-cicd"
 
+
   # ============================================================
   # Stage 0 - Detect Changes
+  # Automatic runs only
   # ============================================================
   detect-changes:
     name: Detect Changes
     runs-on: ubuntu-latest
+
+    if: github.event_name == 'push'
 
     outputs:
       ui_changed: ${{ steps.filter.outputs.ui }}
@@ -76,6 +104,7 @@ jobs:
       infra_changed: ${{ steps.filter.outputs.infra }}
 
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -86,22 +115,33 @@ jobs:
           filters: |
             ui:
               - 'ui/**'
+
             api:
               - 'api/**'
+
             infra:
               - 'infra/**'
 
+
   # ============================================================
   # Stage 1 - Terraform
+  # Automatic runs only
+  # Runs ONLY when infra changes
   # ============================================================
   terraform:
     name: Terraform Infrastructure
     runs-on: ubuntu-latest
+
     needs:
       - get-version
       - detect-changes
 
+    if: |
+      github.event_name == 'push' &&
+      needs.detect-changes.outputs.infra_changed == 'true'
+
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -131,22 +171,52 @@ jobs:
         working-directory: infra
         run: terraform apply -auto-approve
 
+
   # ============================================================
   # Stage 2 - Build UI
+  #
+  # Automatic:
+  #   Only when UI changed
+  #
+  # Manual:
+  #   When component = ui OR both
   # ============================================================
   build-ui:
     name: Build UI
     runs-on: ubuntu-latest
+
     needs:
       - get-version
       - detect-changes
-      - terraform
 
-    if: needs.detect-changes.outputs.ui_changed == 'true'
+    if: |
+      always() &&
+      (
+        (
+          github.event_name == 'push' &&
+          needs.detect-changes.result == 'success' &&
+          needs.detect-changes.outputs.ui_changed == 'true' &&
+          (
+            needs.get-version.result == 'success' &&
+            needs.terraform.result == 'success'
+          )
+        )
+        ||
+        (
+          github.event_name == 'workflow_dispatch' &&
+          (
+            inputs.component == 'ui' ||
+            inputs.component == 'both'
+          )
+        )
+      )
 
     steps:
-      - name: Checkout
+
+      - name: Checkout selected source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.deployment_tag || github.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -161,7 +231,14 @@ jobs:
 
       - name: Build UI
         working-directory: ui
-        run: VITE_APP_VERSION=${{ needs.get-version.outputs.version }} npm run build
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual deployment from tag: ${{ inputs.deployment_tag }}"
+            npm run build
+          else
+            echo "Automatic deployment version: ${{ needs.get-version.outputs.version }}"
+            VITE_APP_VERSION=${{ needs.get-version.outputs.version }} npm run build
+          fi
 
       - name: Upload UI artifact
         uses: actions/upload-artifact@v4
@@ -169,22 +246,52 @@ jobs:
           name: ui-build
           path: ui/dist
 
+
   # ============================================================
   # Stage 3 - Build API
+  #
+  # Automatic:
+  #   Only when API changed
+  #
+  # Manual:
+  #   When component = api OR both
   # ============================================================
   build-api:
     name: Build API
     runs-on: ubuntu-latest
+
     needs:
       - get-version
       - detect-changes
-      - terraform
 
-    if: needs.detect-changes.outputs.api_changed == 'true'
+    if: |
+      always() &&
+      (
+        (
+          github.event_name == 'push' &&
+          needs.detect-changes.result == 'success' &&
+          needs.detect-changes.outputs.api_changed == 'true' &&
+          (
+            needs.get-version.result == 'success' &&
+            needs.terraform.result == 'success'
+          )
+        )
+        ||
+        (
+          github.event_name == 'workflow_dispatch' &&
+          (
+            inputs.component == 'api' ||
+            inputs.component == 'both'
+          )
+        )
+      )
 
     steps:
-      - name: Checkout
+
+      - name: Checkout selected source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.deployment_tag || github.sha }}
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -195,7 +302,7 @@ jobs:
 
       - name: Build API
         working-directory: api
-        run: |  
+        run: |
           chmod +x mvnw
           ./mvnw clean package -DskipTests
 
@@ -205,20 +312,23 @@ jobs:
           name: api-build
           path: api/target/*.jar
 
+
   # ============================================================
   # Stage 4 - Deploy UI
   # ============================================================
   deploy-ui:
     name: Deploy UI
     runs-on: ubuntu-latest
+
     needs:
-      - get-version
-      - detect-changes
       - build-ui
 
-    if: needs.detect-changes.outputs.ui_changed == 'true'
+    if: |
+      always() &&
+      needs.build-ui.result == 'success'
 
     steps:
+
       - name: Download UI artifact
         uses: actions/download-artifact@v4
         with:
@@ -238,20 +348,23 @@ jobs:
           app-name: app-ui-api-cicd-ui-dev-2026
           package: ui-dist
 
+
   # ============================================================
   # Stage 5 - Deploy API
   # ============================================================
   deploy-api:
     name: Deploy API
     runs-on: ubuntu-latest
+
     needs:
-      - get-version
-      - detect-changes
       - build-api
 
-    if: needs.detect-changes.outputs.api_changed == 'true'
+    if: |
+      always() &&
+      needs.build-api.result == 'success'
 
     steps:
+
       - name: Download API artifact
         uses: actions/download-artifact@v4
         with:
@@ -270,8 +383,15 @@ jobs:
         with:
           app-name: app-ui-api-cicd-api-dev-2026
           package: api-build
-  
-  
+
+
+  # ============================================================
+  # Stage 6 - Create Deployment Tag
+  #
+  # Automatic runs only
+  #
+  # Manual tag deployments NEVER create another tag
+  # ============================================================
   tag:
     name: Create Deployment Tag
     runs-on: ubuntu-latest
@@ -282,16 +402,19 @@ jobs:
       - deploy-api
 
     if: |
+      github.event_name == 'push' &&
       always() &&
       (
         (
           needs.deploy-ui.result == 'success' &&
           needs.deploy-api.result == 'skipped'
-        ) ||
+        )
+        ||
         (
           needs.deploy-ui.result == 'skipped' &&
           needs.deploy-api.result == 'success'
-        ) ||
+        )
+        ||
         (
           needs.deploy-ui.result == 'success' &&
           needs.deploy-api.result == 'success'
@@ -299,6 +422,7 @@ jobs:
       )
 
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -307,6 +431,7 @@ jobs:
       - name: Create deployment tag
         env:
           VERSION: ${{ needs.get-version.outputs.version }}
+
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
